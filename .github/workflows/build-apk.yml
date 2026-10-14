@@ -1,4 +1,5 @@
 
+
 name: Build Android APK
 
 on:
@@ -26,6 +27,56 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+
+      - name: Fix widget description
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          matches = list(Path("project").rglob("schedule_widget_info.xml"))
+          if not matches:
+              raise SystemExit("Widget XML file not found")
+
+          widget = matches[0]
+          xml = widget.read_text(encoding="utf-8")
+          reference = 'android:description="@string/schedule_widget_description"'
+
+          if reference not in xml:
+              xml, count = re.subn(
+                  r'android:description="[^"]*"',
+                  reference,
+                  xml,
+                  count=1
+              )
+              if count != 1:
+                  raise SystemExit("Could not fix widget description")
+              widget.write_text(xml, encoding="utf-8")
+
+          values = widget.parent.parent / "values"
+          values.mkdir(parents=True, exist_ok=True)
+          strings = values / "strings.xml"
+          name = 'name="schedule_widget_description"'
+
+          if strings.exists():
+              content = strings.read_text(encoding="utf-8")
+              if name not in content:
+                  content = content.replace(
+                      "</resources>",
+                      '    <string name="schedule_widget_description">Сегодняшние пары и кабинеты из SmartNation</string>\n</resources>'
+                  )
+                  strings.write_text(content, encoding="utf-8")
+          else:
+              strings.write_text(
+                  '<?xml version="1.0" encoding="utf-8"?>\n'
+                  '<resources>\n'
+                  '    <string name="schedule_widget_description">Сегодняшние пары и кабинеты из SmartNation</string>\n'
+                  '</resources>\n',
+                  encoding="utf-8"
+              )
+
+          print("Widget description fixed")
+          PY
 
       - name: Locate project
         id: project
