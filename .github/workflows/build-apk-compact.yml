@@ -1,0 +1,137 @@
+name: Build Android APK (compact widget)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract project
+        run: unzip -q SmartSchedule-project.zip -d project
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compact and make widget resizable
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          widget_files = list(Path("project").rglob("schedule_widget_info.xml"))
+          if not widget_files:
+              raise SystemExit("schedule_widget_info.xml not found")
+          widget = widget_files[0]
+          xml = widget.read_text(encoding="utf-8")
+
+          def set_widget_attr(text, name, value):
+              pattern = rf'android:{re.escape(name)}="[^"]*"'
+              replacement = f'android:{name}="{value}"'
+              if re.search(pattern, text):
+                  return re.sub(pattern, replacement, text, count=1)
+              return text.replace("<appwidget-provider ", f'<appwidget-provider {replacement} ', 1)
+
+          attrs = {
+              "description": "@string/schedule_widget_description",
+              "minWidth": "160dp",
+              "minHeight": "100dp",
+              "minResizeWidth": "110dp",
+              "minResizeHeight": "70dp",
+              "targetCellWidth": "2",
+              "targetCellHeight": "2",
+              "resizeMode": "horizontal|vertical",
+          }
+          for name, value in attrs.items():
+              xml = set_widget_attr(xml, name, value)
+          widget.write_text(xml, encoding="utf-8")
+
+          values_dir = widget.parent.parent / "values"
+          values_dir.mkdir(parents=True, exist_ok=True)
+          strings = values_dir / "strings.xml"
+          description_name = 'name="schedule_widget_description"'
+          description = "Сегодняшние пары и кабинеты из SmartNation"
+          if strings.exists():
+              content = strings.read_text(encoding="utf-8")
+              if description_name not in content:
+                  content = content.replace(
+                      "</resources>",
+                      f'    <string name="schedule_widget_description">{description}</string>\n</resources>'
+                  )
+                  strings.write_text(content, encoding="utf-8")
+          else:
+              strings.write_text(
+                  '<?xml version="1.0" encoding="utf-8"?>\n'
+                  '<resources>\n'
+                  f'    <string name="schedule_widget_description">{description}</string>\n'
+                  '</resources>\n',
+                  encoding="utf-8"
+              )
+
+          layouts = list(Path("project").rglob("widget_schedule.xml"))
+          if not layouts:
+              raise SystemExit("widget_schedule.xml not found")
+          layout_path = layouts[0]
+          layout = layout_path.read_text(encoding="utf-8")
+          layout = re.sub(r'android:padding="[^"]*"', 'android:padding="8dp"', layout, count=1)
+
+          def edit_view(text, view_id, changes):
+              marker = f'android:id="@+id/{view_id}"'
+              pos = text.find(marker)
+              if pos < 0:
+                  raise SystemExit(f"View not found: {view_id}")
+              start = text.rfind("<TextView", 0, pos)
+              end = text.find("/>", pos)
+              if start < 0 or end < 0:
+                  raise SystemExit(f"Cannot locate TextView block: {view_id}")
+              end += 2
+              block = text[start:end]
+              for attr, value in changes.items():
+                  pattern = rf'android:{re.escape(attr)}="[^"]*"'
+                  replacement = f'android:{attr}="{value}"'
+                  if re.search(pattern, block):
+                      block = re.sub(pattern, replacement, block, count=1)
+                  else:
+                      block = block[:-2] + f'\n        {replacement} />'
+              return text[:start] + block + text[end:]
+
+          layout = edit_view(layout, "widget_title", {"textSize": "14sp"})
+          layout = edit_view(layout, "widget_date", {"textSize": "11sp", "layout_marginTop": "1dp"})
+          layout = edit_view(layout, "widget_lessons", {"textSize": "10sp", "maxLines": "3", "layout_marginTop": "4dp"})
+          layout_path.write_text(layout, encoding="utf-8")
+          print("Widget size set to compact 2x2-cell default; resizing enabled.")
+          PY
+
+      - name: Locate project
+        id: project
+        run: |
+          SETTINGS="$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+          if [ -z "$SETTINGS" ]; then
+            echo "Gradle settings file not found"
+            exit 1
+          fi
+          echo "dir=$(dirname "$SETTINGS")" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartSchedule-APK
+          path: project/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
