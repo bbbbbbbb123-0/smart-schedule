@@ -1,0 +1,283 @@
+name: Build SmartSchedule (browser + OriginOS test)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract project
+        run: unzip -q SmartSchedule-project.zip -d project
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compact and make widget resizable
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          widget_files = list(Path("project").rglob("schedule_widget_info.xml"))
+          if not widget_files:
+              raise SystemExit("schedule_widget_info.xml not found")
+          widget = widget_files[0]
+          xml = widget.read_text(encoding="utf-8")
+
+          def set_widget_attr(text, name, value):
+              pattern = rf'android:{re.escape(name)}="[^"]*"'
+              replacement = f'android:{name}="{value}"'
+              if re.search(pattern, text):
+                  return re.sub(pattern, replacement, text, count=1)
+              return text.replace("<appwidget-provider ", f'<appwidget-provider {replacement} ', 1)
+
+          attrs = {
+              "description": "@string/schedule_widget_description",
+              "minWidth": "160dp",
+              "minHeight": "100dp",
+              "minResizeWidth": "110dp",
+              "minResizeHeight": "70dp",
+              "targetCellWidth": "2",
+              "targetCellHeight": "2",
+              "resizeMode": "horizontal|vertical",
+              "widgetCategory": "home_screen|keyguard",
+          }
+          for name, value in attrs.items():
+              xml = set_widget_attr(xml, name, value)
+          widget.write_text(xml, encoding="utf-8")
+
+          values_dir = widget.parent.parent / "values"
+          values_dir.mkdir(parents=True, exist_ok=True)
+          strings = values_dir / "strings.xml"
+          description_name = 'name="schedule_widget_description"'
+          description = "Сегодняшние пары и кабинеты из SmartNation"
+          if strings.exists():
+              content = strings.read_text(encoding="utf-8")
+              if description_name not in content:
+                  content = content.replace(
+                      "</resources>",
+                      f'    <string name="schedule_widget_description">{description}</string>\n</resources>'
+                  )
+                  strings.write_text(content, encoding="utf-8")
+          else:
+              strings.write_text(
+                  '<?xml version="1.0" encoding="utf-8"?>\n'
+                  '<resources>\n'
+                  f'    <string name="schedule_widget_description">{description}</string>\n'
+                  '</resources>\n',
+                  encoding="utf-8"
+              )
+
+          layouts = list(Path("project").rglob("widget_schedule.xml"))
+          if not layouts:
+              raise SystemExit("widget_schedule.xml not found")
+          layout_path = layouts[0]
+          layout = layout_path.read_text(encoding="utf-8")
+          layout = re.sub(r'android:padding="[^"]*"', 'android:padding="8dp"', layout, count=1)
+
+          def edit_view(text, view_id, changes):
+              marker = f'android:id="@+id/{view_id}"'
+              pos = text.find(marker)
+              if pos < 0:
+                  raise SystemExit(f"View not found: {view_id}")
+              start = text.rfind("<TextView", 0, pos)
+              end = text.find("/>", pos)
+              if start < 0 or end < 0:
+                  raise SystemExit(f"Cannot locate TextView block: {view_id}")
+              end += 2
+              block = text[start:end]
+              for attr, value in changes.items():
+                  pattern = rf'android:{re.escape(attr)}="[^"]*"'
+                  replacement = f'android:{attr}="{value}"'
+                  if re.search(pattern, block):
+                      block = re.sub(pattern, replacement, block, count=1)
+                  else:
+                      block = block[:-2] + f'\n        {replacement} />'
+              return text[:start] + block + text[end:]
+
+          layout = edit_view(layout, "widget_title", {"textSize": "14sp"})
+          layout = edit_view(layout, "widget_date", {"textSize": "11sp", "layout_marginTop": "1dp"})
+          layout = edit_view(layout, "widget_lessons", {"textSize": "10sp", "maxLines": "3", "layout_marginTop": "4dp"})
+          layout_path.write_text(layout, encoding="utf-8")
+          print("Widget size set to compact 2x2-cell default; resizing enabled.")
+          PY
+
+      - name: Keep SmartNation browser open and add navigation controls
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = list(Path("project").rglob("ScheduleWebActivity.kt"))
+          if not files:
+              raise SystemExit("ScheduleWebActivity.kt not found")
+          path = files[0]
+          text = path.read_text(encoding="utf-8")
+
+          old_finish = '                    handler.postDelayed({ if (!isFinishing) finish() }, 800L)'
+          if old_finish in text:
+              text = text.replace(old_finish, '                    CookieManager.getInstance().flush()', 1)
+          elif 'Возвращаюсь в приложение…' in text:
+              raise SystemExit("Found save status but couldn't locate the auto-close line")
+
+          text = text.replace(
+              'status.text = "Расписание сохранено. Возвращаюсь в приложение…"',
+              'status.text = "Расписание сохранено. Можешь продолжать пользоваться сайтом. Кнопка «В приложение» вернёт тебя к расписанию."'
+          )
+
+          text = text.replace(
+              '            setOnClickListener {\n                checks = 0',
+              '            setOnClickListener {\n                syncSucceeded = false\n                checks = 0',
+              1
+          )
+
+          needle = '        top.addView(action, LinearLayout.LayoutParams(-1, dp(46)))\n'
+          controls = (
+              '        top.addView(action, LinearLayout.LayoutParams(-1, dp(46)))\n\n'
+              '        fun browserButton(label: String, onClick: () -> Unit): Button = Button(this).apply {\n'
+              '            text = label\n'
+              '            isAllCaps = false\n'
+              '            textSize = 12f\n'
+              '            minWidth = 0\n'
+              '            setOnClickListener { onClick() }\n'
+              '        }\n\n'
+              '        val browserRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }\n'
+              '        browserRow1.addView(browserButton("← Назад по сайту") {\n'
+              '            if (webView.canGoBack()) webView.goBack()\n'
+              '            else Toast.makeText(this, "Предыдущей страницы нет", Toast.LENGTH_SHORT).show()\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        browserRow1.addView(browserButton("Главная SmartNation") {\n'
+              '            webView.loadUrl(HOME_URL)\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        top.addView(browserRow1, LinearLayout.LayoutParams(-1, dp(44)))\n\n'
+              '        val browserRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }\n'
+              '        browserRow2.addView(browserButton("Обновить страницу") {\n'
+              '            webView.reload()\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        browserRow2.addView(browserButton("В приложение") {\n'
+              '            CookieManager.getInstance().flush()\n'
+              '            finish()\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        top.addView(browserRow2, LinearLayout.LayoutParams(-1, dp(44)))\n'
+          )
+          if needle not in text:
+              raise SystemExit("Couldn't find the toolbar insertion point in ScheduleWebActivity.kt")
+          if 'browserRow1' not in text:
+              text = text.replace(needle, controls, 1)
+
+          if 'private const val HOME_URL' not in text:
+              old_url = '        private const val SCHEDULE_URL = "https://college.smartnation.kz/ru/atr/control/training-schedule/33125"'
+              new_url = '        private const val HOME_URL = "https://college.smartnation.kz/ru/"\n' + old_url
+              if old_url not in text:
+                  raise SystemExit("Couldn't find SmartNation schedule URL")
+              text = text.replace(old_url, new_url, 1)
+
+          marker = '                progress.visibility = ProgressBar.GONE\n                handler.removeCallbacks(retryRunnable)\n                checks = 0\n                handler.postDelayed(retryRunnable, 400L)'
+          replacement = (
+              '                progress.visibility = ProgressBar.GONE\n'
+              '                CookieManager.getInstance().flush()\n'
+              '                handler.removeCallbacks(retryRunnable)\n'
+              '                checks = 0\n'
+              '                if (syncSucceeded) {\n'
+              '                    status.text = "Сайт SmartNation открыт. Для обновления выбери расписание и нажми «Проверить и сохранить расписание»."\n'
+              '                } else {\n'
+              '                    handler.postDelayed(retryRunnable, 400L)\n'
+              '                }'
+          )
+          if marker in text:
+              text = text.replace(marker, replacement, 1)
+          else:
+              raise SystemExit("Couldn't locate onPageFinished retry block")
+
+          if 'override fun onBackPressed()' not in text:
+              marker = '    override fun onDestroy() {'
+              back = (
+                  '    override fun onPause() {\n'
+                  '        if (::webView.isInitialized) CookieManager.getInstance().flush()\n'
+                  '        super.onPause()\n'
+                  '    }\n\n'
+                  '    @Deprecated("Deprecated in Android")\n'
+                  '    override fun onBackPressed() {\n'
+                  '        if (::webView.isInitialized && webView.canGoBack()) webView.goBack()\n'
+                  '        else {\n'
+                  '            CookieManager.getInstance().flush()\n'
+                  '            finish()\n'
+                  '        }\n'
+                  '    }\n\n'
+              )
+              if marker not in text:
+                  raise SystemExit("Couldn't locate onDestroy() in ScheduleWebActivity.kt")
+              text = text.replace(marker, back + marker, 1)
+
+          path.write_text(text, encoding="utf-8")
+          print("WebView stays open after timetable sync; navigation buttons and cookie flushing added.")
+          PY
+
+      - name: Keep test build separate from installed app
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          build_files = list(Path("project").rglob("app/build.gradle.kts"))
+          if not build_files:
+              raise SystemExit("app/build.gradle.kts not found")
+          build_file = build_files[0]
+          build_text = build_file.read_text(encoding="utf-8")
+          build_text, count = re.subn(
+              r'applicationId\s*=\s*"kz\.asckwab\.smartschedule"',
+              'applicationId = "kz.asckwab.smartschedule.originostest"',
+              build_text,
+              count=1
+          )
+          if count != 1:
+              raise SystemExit("Could not set separate test package ID")
+          build_file.write_text(build_text, encoding="utf-8")
+
+          manifests = list(Path("project").rglob("app/src/main/AndroidManifest.xml"))
+          if not manifests:
+              raise SystemExit("AndroidManifest.xml not found")
+          manifest = manifests[0]
+          manifest_text = manifest.read_text(encoding="utf-8")
+          manifest_text = manifest_text.replace(
+              'android:label="Smart Расписание"',
+              'android:label="Smart Расписание — тест"',
+              1
+          )
+          manifest.write_text(manifest_text, encoding="utf-8")
+          print("Created a side-by-side test app; the existing app remains installed.")
+          PY
+
+      - name: Locate project
+        id: project
+        run: |
+          SETTINGS="$(find project -type f \( -name settings.gradle -o -name settings.gradle.kts \) -print -quit)"
+          if [ -z "$SETTINGS" ]; then
+            echo "Gradle settings file not found"
+            exit 1
+          fi
+          echo "dir=$(dirname "$SETTINGS")" >> "$GITHUB_OUTPUT"
+
+      - name: Build APK
+        working-directory: ${{ steps.project.outputs.dir }}
+        run: gradle assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartSchedule-OriginOS-Browser
+          path: project/**/build/outputs/apk/**/*.apk
+          if-no-files-found: error
