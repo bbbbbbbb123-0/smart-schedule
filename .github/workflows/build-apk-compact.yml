@@ -410,9 +410,9 @@ jobs:
               android.app.AlertDialog.Builder(this)
                   .setTitle("Добавить виджет вручную")
                   .setMessage(
-                      "1. Вернись на рабочий стол.\\n" +
-                      "2. Удерживай палец на свободном месте.\\n" +
-                      "3. Открой «Виджеты».\\n" +
+                      "1. Вернись на рабочий стол.\n" +
+                      "2. Удерживай палец на свободном месте.\n" +
+                      "3. Открой «Виджеты».\n" +
                       "4. Найди «Smart Расписание» и перетащи виджет на экран."
                   )
                   .setPositiveButton("Понятно", null)
@@ -431,11 +431,11 @@ jobs:
           provider_path = providers[0]
           kotlin = provider_path.read_text(encoding="utf-8")
           root_click = "views.setOnClickPendingIntent(R.id.widget_root, pending)"
-          header_clicks = (
-              "views.setOnClickPendingIntent(R.id.widget_title, pending)\\n"
-              "            views.setOnClickPendingIntent(R.id.widget_date, pending)\\n"
+          header_clicks = "\n".join([
+              "views.setOnClickPendingIntent(R.id.widget_title, pending)",
+              "            views.setOnClickPendingIntent(R.id.widget_date, pending)",
               "            views.setOnClickPendingIntent(R.id.widget_empty, pending)"
-          )
+          ])
           if root_click in kotlin:
               kotlin = kotlin.replace(root_click, header_clicks, 1)
           elif "views.setOnClickPendingIntent(R.id.widget_title, pending)" not in kotlin:
