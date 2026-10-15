@@ -17,6 +17,264 @@ jobs:
       - name: Extract project
         run: unzip -q SmartSchedule-project.zip -d project
 
+      - name: Apply scrollable widget fix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("project")
+
+          def write_one(pattern, content):
+              matches = list(root.rglob(pattern))
+              if not matches:
+                  if pattern.endswith(".kt"):
+                      target = root / "SmartSchedule/app/src/main/java/kz/asckwab/smartschedule" / pattern
+                  else:
+                      target = root / "SmartSchedule/app/src/main/res/layout" / pattern
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  matches = [target]
+              matches[0].write_text(content.lstrip(), encoding="utf-8")
+              print(f"Updated {matches[0]}")
+
+          write_one("widget_schedule.xml", r"""<?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:id="@+id/widget_root"
+              android:layout_width="match_parent"
+              android:layout_height="match_parent"
+              android:background="@drawable/widget_background"
+              android:orientation="vertical"
+              android:padding="8dp">
+
+              <TextView
+                  android:id="@+id/widget_title"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:ellipsize="end"
+                  android:maxLines="1"
+                  android:text="Моё расписание"
+                  android:textColor="#FFFFFF"
+                  android:textSize="14sp"
+                  android:textStyle="bold" />
+
+              <TextView
+                  android:id="@+id/widget_date"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="1dp"
+                  android:ellipsize="end"
+                  android:maxLines="1"
+                  android:text="Синхронизируй расписание"
+                  android:textColor="#AFC0DE"
+                  android:textSize="11sp" />
+
+              <ListView
+                  android:id="@+id/widget_lesson_list"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:layout_marginTop="3dp"
+                  android:divider="#52617B"
+                  android:dividerHeight="1dp"
+                  android:cacheColorHint="#00000000"
+                  android:scrollbars="vertical"
+                  android:background="#00000000"
+                  android:paddingBottom="1dp" />
+
+              <TextView
+                  android:id="@+id/widget_empty"
+                  android:layout_width="match_parent"
+                  android:layout_height="0dp"
+                  android:layout_weight="1"
+                  android:gravity="top"
+                  android:text="Занятий нет"
+                  android:textColor="#FFFFFF"
+                  android:textSize="11sp"
+                  android:visibility="gone" />
+
+              <TextView
+                  android:id="@+id/widget_lessons"
+                  android:layout_width="0dp"
+                  android:layout_height="0dp"
+                  android:visibility="gone"
+                  android:maxLines="5" />
+          </LinearLayout>
+          """)
+
+          write_one("widget_lesson_row.xml", r"""<?xml version="1.0" encoding="utf-8"?>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+              android:layout_width="match_parent"
+              android:layout_height="wrap_content"
+              android:orientation="vertical"
+              android:paddingTop="4dp"
+              android:paddingBottom="4dp"
+              android:paddingStart="1dp"
+              android:paddingEnd="1dp"
+              android:background="#00000000">
+              <TextView
+                  android:id="@+id/widget_lesson_time"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:textColor="#AFC5FF"
+                  android:textSize="11sp"
+                  android:maxLines="1"
+                  android:ellipsize="end" />
+              <TextView
+                  android:id="@+id/widget_lesson_subject"
+                  android:layout_width="match_parent"
+                  android:layout_height="wrap_content"
+                  android:layout_marginTop="1dp"
+                  android:textColor="#FFFFFF"
+                  android:textSize="11sp"
+                  android:maxLines="2"
+                  android:ellipsize="end" />
+          </LinearLayout>
+          """)
+
+          write_one("ScheduleWidgetProvider.kt", r"""package kz.asckwab.smartschedule
+
+          import android.app.PendingIntent
+          import android.appwidget.AppWidgetManager
+          import android.appwidget.AppWidgetProvider
+          import android.content.ComponentName
+          import android.content.Context
+          import android.content.Intent
+          import android.net.Uri
+          import android.widget.RemoteViews
+          import java.time.LocalDate
+
+          class ScheduleWidgetProvider : AppWidgetProvider() {
+              override fun onUpdate(context: Context, manager: AppWidgetManager, appWidgetIds: IntArray) {
+                  appWidgetIds.forEach { updateOne(context, manager, it) }
+              }
+
+              override fun onAppWidgetOptionsChanged(
+                  context: Context,
+                  manager: AppWidgetManager,
+                  appWidgetId: Int,
+                  newOptions: android.os.Bundle
+              ) {
+                  updateOne(context, manager, appWidgetId)
+              }
+
+              companion object {
+                  fun updateAll(context: Context) {
+                      val manager = AppWidgetManager.getInstance(context)
+                      val component = ComponentName(context, ScheduleWidgetProvider::class.java)
+                      manager.getAppWidgetIds(component).forEach { updateOne(context, manager, it) }
+                  }
+
+                  private fun updateOne(context: Context, manager: AppWidgetManager, id: Int) {
+                      val views = RemoteViews(context.packageName, R.layout.widget_schedule)
+                      val openIntent = Intent(context, MainActivity::class.java)
+                      val pending = PendingIntent.getActivity(
+                          context,
+                          2000 + id,
+                          openIntent,
+                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                      )
+                      views.setOnClickPendingIntent(R.id.widget_root, pending)
+
+                      val serviceIntent = Intent(context, ScheduleWidgetService::class.java).apply {
+                          putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
+                          data = Uri.parse(toUri(Intent.URI_INTENT_SCHEME))
+                      }
+                      views.setRemoteAdapter(R.id.widget_lesson_list, serviceIntent)
+                      views.setEmptyView(R.id.widget_lesson_list, R.id.widget_empty)
+
+                      val saved = ScheduleStorage.load(context)
+                      val selected = saved?.let { ScheduleLogic.selectDay(it.days) }
+                      if (selected == null) {
+                          views.setTextViewText(R.id.widget_title, "Моё расписание")
+                          views.setTextViewText(R.id.widget_date, "Нет актуальных данных")
+                          views.setTextViewText(R.id.widget_empty, "Открой приложение и синхронизируй SmartNation.")
+                      } else {
+                          val today = LocalDate.now().toString()
+                          views.setTextViewText(
+                              R.id.widget_title,
+                              if (selected.date == today) "Сегодняшние пары" else "Следующий учебный день"
+                          )
+                          views.setTextViewText(R.id.widget_date, ScheduleLogic.dateLabel(selected))
+                          views.setTextViewText(R.id.widget_empty, "Занятий нет")
+                      }
+                      manager.updateAppWidget(id, views)
+                      manager.notifyAppWidgetViewDataChanged(id, R.id.widget_lesson_list)
+                  }
+              }
+          }
+          """)
+
+          write_one("ScheduleWidgetService.kt", r"""package kz.asckwab.smartschedule
+
+          import android.content.Context
+          import android.content.Intent
+          import android.widget.RemoteViews
+          import android.widget.RemoteViewsService
+
+          class ScheduleWidgetService : RemoteViewsService() {
+              override fun onGetViewFactory(intent: Intent): RemoteViewsFactory =
+                  LessonViewsFactory(applicationContext)
+          }
+
+          private class LessonViewsFactory(
+              private val context: Context
+          ) : RemoteViewsService.RemoteViewsFactory {
+              private var lessons: List<Lesson> = emptyList()
+
+              override fun onCreate() = Unit
+
+              override fun onDataSetChanged() {
+                  val saved = ScheduleStorage.load(context)
+                  val selected = saved?.let { ScheduleLogic.selectDay(it.days) }
+                  lessons = selected?.lessons.orEmpty()
+              }
+
+              override fun onDestroy() {
+                  lessons = emptyList()
+              }
+
+              override fun getCount(): Int = lessons.size
+
+              override fun getViewAt(position: Int): RemoteViews? {
+                  val lesson = lessons.getOrNull(position) ?: return null
+                  val row = RemoteViews(context.packageName, R.layout.widget_lesson_row)
+                  val time = when {
+                      lesson.start.isNotBlank() && lesson.end.isNotBlank() -> "${lesson.start}–${lesson.end}"
+                      lesson.start.isNotBlank() -> lesson.start
+                      else -> "Время не указано"
+                  }
+                  val room = lesson.room.takeIf { it.isNotBlank() }?.let { "${it} · " }.orEmpty()
+                  row.setTextViewText(R.id.widget_lesson_time, time)
+                  row.setTextViewText(R.id.widget_lesson_subject, room + lesson.subject)
+                  return row
+              }
+
+              override fun getLoadingView(): RemoteViews? = null
+              override fun getViewTypeCount(): Int = 1
+              override fun getItemId(position: Int): Long = position.toLong()
+              override fun hasStableIds(): Boolean = true
+          }
+          """)
+
+          manifests = list(root.rglob("AndroidManifest.xml"))
+          if not manifests:
+              raise SystemExit("AndroidManifest.xml not found")
+          manifest = manifests[0]
+          xml = manifest.read_text(encoding="utf-8")
+          service = '''        <service
+                  android:name=".ScheduleWidgetService"
+                  android:permission="android.permission.BIND_REMOTEVIEWS"
+                  android:exported="false" />
+
+          '''
+          if ".ScheduleWidgetService" not in xml:
+              marker = '        <receiver\n            android:name=".ScheduleWidgetProvider"'
+              if marker not in xml:
+                  raise SystemExit("Cannot locate app-widget receiver in manifest")
+              xml = xml.replace(marker, service + marker, 1)
+              manifest.write_text(xml, encoding="utf-8")
+          print("Scrollable list widget sources are ready.")
+          PY
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
