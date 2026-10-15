@@ -725,6 +725,9 @@ jobs:
           print("Stable application ID, version code, and label configured.")
           PY
 
+      - name: Add one-time legal notice and review button
+        run: python3 .github/scripts/add_legal_notice.py
+
       - name: Locate project
         id: project
         run: |
