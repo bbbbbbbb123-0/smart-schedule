@@ -445,6 +445,17 @@ jobs:
           layout = edit_view(layout, "widget_date", {"textSize": "11sp", "layout_marginTop": "1dp"})
           layout = edit_view(layout, "widget_lessons", {"textSize": "10sp", "maxLines": "3", "layout_marginTop": "4dp"})
           layout_path.write_text(layout, encoding="utf-8")
+          build_files = list(Path("project").rglob("app/build.gradle.kts"))
+          if not build_files:
+              raise SystemExit("app/build.gradle.kts not found")
+          build_file = build_files[0]
+          build_text = build_file.read_text(encoding="utf-8")
+          build_text, code_count = re.subn(r'versionCode\\s*=\\s*1', 'versionCode = 2', build_text, count=1)
+          build_text, name_count = re.subn(r'versionName\\s*=\\s*"1\\.0\\.0"', 'versionName = "1.1.0"', build_text, count=1)
+          if code_count != 1 or name_count != 1:
+              raise SystemExit("Could not bump app version for in-place update")
+          build_file.write_text(build_text, encoding="utf-8")
+
           print("Widget size set to compact 2x2-cell default; resizing enabled.")
           PY
 
