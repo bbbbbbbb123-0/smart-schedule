@@ -336,6 +336,42 @@ jobs:
           print("Widget description fixed")
           PY
 
+      - name: Prepare side-by-side widget test build
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("project")
+          build_files = list(root.rglob("app/build.gradle.kts"))
+          if not build_files:
+              raise SystemExit("app/build.gradle.kts not found")
+          build_file = build_files[0]
+          build_text = build_file.read_text(encoding="utf-8")
+          build_text, count = re.subn(
+              r'applicationId\s*=\s*"kz\.asckwab\.smartschedule"',
+              'applicationId = "kz.asckwab.smartschedule.widgetfix"',
+              build_text,
+              count=1
+          )
+          if count != 1:
+              raise SystemExit("Could not set side-by-side test application ID")
+          build_file.write_text(build_text, encoding="utf-8")
+
+          manifests = list(root.rglob("app/src/main/AndroidManifest.xml"))
+          if not manifests:
+              raise SystemExit("AndroidManifest.xml not found")
+          manifest = manifests[0]
+          manifest_text = manifest.read_text(encoding="utf-8")
+          manifest_text = manifest_text.replace(
+              'android:label="Smart Расписание"',
+              'android:label="Smart Расписание — тест"',
+              1
+          )
+          manifest.write_text(manifest_text, encoding="utf-8")
+          print("Side-by-side test package ID and app label set.")
+          PY
+
       - name: Locate project
         id: project
         run: |
