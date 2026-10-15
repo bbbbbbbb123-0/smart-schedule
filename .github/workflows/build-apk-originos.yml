@@ -359,6 +359,91 @@ jobs:
           print("Added in-app widget pin button.")
           PY
 
+      - name: Make widget button report status and allow list scrolling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("project")
+          activities = list(root.rglob("MainActivity.kt"))
+          if not activities:
+              raise SystemExit("MainActivity.kt not found")
+          path = activities[0]
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'    private fun requestAddWidget\(\) \{.*?\n    \}\n\n(?=    private fun createView\(\) \{)'
+          replacement = r"""    private fun requestAddWidget() {
+              android.app.AlertDialog.Builder(this)
+                  .setTitle("Добавить виджет")
+                  .setMessage(
+                      "Попробую открыть системное подтверждение Android. " +
+                      "Если оно не появится, выбери «Как добавить вручную»."
+                  )
+                  .setPositiveButton("Запросить") { _, _ ->
+                      val manager = android.appwidget.AppWidgetManager.getInstance(this)
+                      val provider = android.content.ComponentName(this, ScheduleWidgetProvider::class.java)
+                      val accepted = try {
+                          manager.isRequestPinAppWidgetSupported &&
+                              manager.requestPinAppWidget(provider, null, null)
+                      } catch (_: Exception) {
+                          false
+                      }
+                      if (accepted) {
+                          android.widget.Toast.makeText(
+                              this,
+                              "Запрос отправлен. Подтверди его, если системное окно появилось.",
+                              android.widget.Toast.LENGTH_LONG
+                          ).show()
+                      } else {
+                          showManualWidgetInstructions()
+                      }
+                  }
+                  .setNeutralButton("Как добавить вручную") { _, _ ->
+                      showManualWidgetInstructions()
+                  }
+                  .setNegativeButton("Отмена", null)
+                  .show()
+          }
+
+          private fun showManualWidgetInstructions() {
+              android.app.AlertDialog.Builder(this)
+                  .setTitle("Добавить виджет вручную")
+                  .setMessage(
+                      "1. Вернись на рабочий стол.\\n" +
+                      "2. Удерживай палец на свободном месте.\\n" +
+                      "3. Открой «Виджеты».\\n" +
+                      "4. Найди «Smart Расписание» и перетащи виджет на экран."
+                  )
+                  .setPositiveButton("Понятно", null)
+                  .show()
+          }
+
+          """
+          text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit("Could not replace requestAddWidget() in MainActivity.kt")
+          path.write_text(text, encoding="utf-8")
+
+          providers = list(root.rglob("ScheduleWidgetProvider.kt"))
+          if not providers:
+              raise SystemExit("ScheduleWidgetProvider.kt not found")
+          provider_path = providers[0]
+          kotlin = provider_path.read_text(encoding="utf-8")
+          root_click = "views.setOnClickPendingIntent(R.id.widget_root, pending)"
+          header_clicks = (
+              "views.setOnClickPendingIntent(R.id.widget_title, pending)\\n"
+              "            views.setOnClickPendingIntent(R.id.widget_date, pending)\\n"
+              "            views.setOnClickPendingIntent(R.id.widget_empty, pending)"
+          )
+          if root_click in kotlin:
+              kotlin = kotlin.replace(root_click, header_clicks, 1)
+          elif "views.setOnClickPendingIntent(R.id.widget_title, pending)" not in kotlin:
+              raise SystemExit("Could not adjust widget root click handler")
+          provider_path.write_text(kotlin, encoding="utf-8")
+          print("Widget button now gives visible feedback; root click no longer intercepts list scrolling.")
+          PY
+
       - name: Compact and make widget resizable
         run: |
           python3 - <<'PY'

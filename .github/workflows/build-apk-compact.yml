@@ -359,6 +359,202 @@ jobs:
           print("Added in-app widget pin button.")
           PY
 
+      - name: Make widget button report status and allow list scrolling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path("project")
+          activities = list(root.rglob("MainActivity.kt"))
+          if not activities:
+              raise SystemExit("MainActivity.kt not found")
+          path = activities[0]
+          text = path.read_text(encoding="utf-8")
+
+          pattern = r'    private fun requestAddWidget\(\) \{.*?\n    \}\n\n(?=    private fun createView\(\) \{)'
+          replacement = r"""    private fun requestAddWidget() {
+              android.app.AlertDialog.Builder(this)
+                  .setTitle("Добавить виджет")
+                  .setMessage(
+                      "Попробую открыть системное подтверждение Android. " +
+                      "Если оно не появится, выбери «Как добавить вручную»."
+                  )
+                  .setPositiveButton("Запросить") { _, _ ->
+                      val manager = android.appwidget.AppWidgetManager.getInstance(this)
+                      val provider = android.content.ComponentName(this, ScheduleWidgetProvider::class.java)
+                      val accepted = try {
+                          manager.isRequestPinAppWidgetSupported &&
+                              manager.requestPinAppWidget(provider, null, null)
+                      } catch (_: Exception) {
+                          false
+                      }
+                      if (accepted) {
+                          android.widget.Toast.makeText(
+                              this,
+                              "Запрос отправлен. Подтверди его, если системное окно появилось.",
+                              android.widget.Toast.LENGTH_LONG
+                          ).show()
+                      } else {
+                          showManualWidgetInstructions()
+                      }
+                  }
+                  .setNeutralButton("Как добавить вручную") { _, _ ->
+                      showManualWidgetInstructions()
+                  }
+                  .setNegativeButton("Отмена", null)
+                  .show()
+          }
+
+          private fun showManualWidgetInstructions() {
+              android.app.AlertDialog.Builder(this)
+                  .setTitle("Добавить виджет вручную")
+                  .setMessage(
+                      "1. Вернись на рабочий стол.\\n" +
+                      "2. Удерживай палец на свободном месте.\\n" +
+                      "3. Открой «Виджеты».\\n" +
+                      "4. Найди «Smart Расписание» и перетащи виджет на экран."
+                  )
+                  .setPositiveButton("Понятно", null)
+                  .show()
+          }
+
+          """
+          text, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+          if count != 1:
+              raise SystemExit("Could not replace requestAddWidget() in MainActivity.kt")
+          path.write_text(text, encoding="utf-8")
+
+          providers = list(root.rglob("ScheduleWidgetProvider.kt"))
+          if not providers:
+              raise SystemExit("ScheduleWidgetProvider.kt not found")
+          provider_path = providers[0]
+          kotlin = provider_path.read_text(encoding="utf-8")
+          root_click = "views.setOnClickPendingIntent(R.id.widget_root, pending)"
+          header_clicks = (
+              "views.setOnClickPendingIntent(R.id.widget_title, pending)\\n"
+              "            views.setOnClickPendingIntent(R.id.widget_date, pending)\\n"
+              "            views.setOnClickPendingIntent(R.id.widget_empty, pending)"
+          )
+          if root_click in kotlin:
+              kotlin = kotlin.replace(root_click, header_clicks, 1)
+          elif "views.setOnClickPendingIntent(R.id.widget_title, pending)" not in kotlin:
+              raise SystemExit("Could not adjust widget root click handler")
+          provider_path.write_text(kotlin, encoding="utf-8")
+          print("Widget button now gives visible feedback; root click no longer intercepts list scrolling.")
+          PY
+
+      - name: Keep SmartNation browser open and add navigation controls
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          files = list(Path("project").rglob("ScheduleWebActivity.kt"))
+          if not files:
+              raise SystemExit("ScheduleWebActivity.kt not found")
+          path = files[0]
+          text = path.read_text(encoding="utf-8")
+
+          old_finish = '                    handler.postDelayed({ if (!isFinishing) finish() }, 800L)'
+          if old_finish in text:
+              text = text.replace(old_finish, '                    CookieManager.getInstance().flush()', 1)
+          elif 'Возвращаюсь в приложение…' in text:
+              raise SystemExit("Found save status but couldn't locate the auto-close line")
+
+          text = text.replace(
+              'status.text = "Расписание сохранено. Возвращаюсь в приложение…"',
+              'status.text = "Расписание сохранено. Можешь продолжать пользоваться сайтом. Кнопка «В приложение» вернёт тебя к расписанию."'
+          )
+
+          text = text.replace(
+              '            setOnClickListener {\n                checks = 0',
+              '            setOnClickListener {\n                syncSucceeded = false\n                checks = 0',
+              1
+          )
+
+          needle = '        top.addView(action, LinearLayout.LayoutParams(-1, dp(46)))\n'
+          controls = (
+              '        top.addView(action, LinearLayout.LayoutParams(-1, dp(46)))\n\n'
+              '        fun browserButton(label: String, onClick: () -> Unit): Button = Button(this).apply {\n'
+              '            text = label\n'
+              '            isAllCaps = false\n'
+              '            textSize = 12f\n'
+              '            minWidth = 0\n'
+              '            setOnClickListener { onClick() }\n'
+              '        }\n\n'
+              '        val browserRow1 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }\n'
+              '        browserRow1.addView(browserButton("← Назад по сайту") {\n'
+              '            if (webView.canGoBack()) webView.goBack()\n'
+              '            else Toast.makeText(this, "Предыдущей страницы нет", Toast.LENGTH_SHORT).show()\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        browserRow1.addView(browserButton("Главная SmartNation") {\n'
+              '            webView.loadUrl(HOME_URL)\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        top.addView(browserRow1, LinearLayout.LayoutParams(-1, dp(44)))\n\n'
+              '        val browserRow2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }\n'
+              '        browserRow2.addView(browserButton("Обновить страницу") {\n'
+              '            webView.reload()\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        browserRow2.addView(browserButton("В приложение") {\n'
+              '            CookieManager.getInstance().flush()\n'
+              '            finish()\n'
+              '        }, LinearLayout.LayoutParams(0, dp(42), 1f))\n'
+              '        top.addView(browserRow2, LinearLayout.LayoutParams(-1, dp(44)))\n'
+          )
+          if needle not in text:
+              raise SystemExit("Couldn't find the toolbar insertion point in ScheduleWebActivity.kt")
+          if 'browserRow1' not in text:
+              text = text.replace(needle, controls, 1)
+
+          if 'private const val HOME_URL' not in text:
+              old_url = '        private const val SCHEDULE_URL = "https://college.smartnation.kz/ru/atr/control/training-schedule/33125"'
+              new_url = '        private const val HOME_URL = "https://college.smartnation.kz/ru/"\n' + old_url
+              if old_url not in text:
+                  raise SystemExit("Couldn't find SmartNation schedule URL")
+              text = text.replace(old_url, new_url, 1)
+
+          marker = '                progress.visibility = ProgressBar.GONE\n                handler.removeCallbacks(retryRunnable)\n                checks = 0\n                handler.postDelayed(retryRunnable, 400L)'
+          replacement = (
+              '                progress.visibility = ProgressBar.GONE\n'
+              '                CookieManager.getInstance().flush()\n'
+              '                handler.removeCallbacks(retryRunnable)\n'
+              '                checks = 0\n'
+              '                if (syncSucceeded) {\n'
+              '                    status.text = "Сайт SmartNation открыт. Для обновления выбери расписание и нажми «Проверить и сохранить расписание»."\n'
+              '                } else {\n'
+              '                    handler.postDelayed(retryRunnable, 400L)\n'
+              '                }'
+          )
+          if marker in text:
+              text = text.replace(marker, replacement, 1)
+          else:
+              raise SystemExit("Couldn't locate onPageFinished retry block")
+
+          if 'override fun onBackPressed()' not in text:
+              marker = '    override fun onDestroy() {'
+              back = (
+                  '    override fun onPause() {\n'
+                  '        if (::webView.isInitialized) CookieManager.getInstance().flush()\n'
+                  '        super.onPause()\n'
+                  '    }\n\n'
+                  '    @Deprecated("Deprecated in Android")\n'
+                  '    override fun onBackPressed() {\n'
+                  '        if (::webView.isInitialized && webView.canGoBack()) webView.goBack()\n'
+                  '        else {\n'
+                  '            CookieManager.getInstance().flush()\n'
+                  '            finish()\n'
+                  '        }\n'
+                  '    }\n\n'
+              )
+              if marker not in text:
+                  raise SystemExit("Couldn't locate onDestroy() in ScheduleWebActivity.kt")
+              text = text.replace(marker, back + marker, 1)
+
+          path.write_text(text, encoding="utf-8")
+          print("WebView stays open after timetable sync; navigation buttons and cookie flushing added.")
+          PY
+
+
       - name: Compact and make widget resizable
         run: |
           python3 - <<'PY'
