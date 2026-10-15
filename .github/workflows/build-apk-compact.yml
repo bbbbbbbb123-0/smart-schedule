@@ -706,6 +706,9 @@ jobs:
       - name: Add one-time legal notice and review button
         run: python3 .github/scripts/add_legal_notice.py
 
+      - name: Add tap-to-expand lesson details and grade sync
+        run: python3 .github/scripts/add_lesson_details.py
+
       - name: Locate project
         id: project
         run: |

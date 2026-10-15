@@ -437,12 +437,11 @@ if "EXTRA_GRADES_MODE" not in web:
                     if (!cell) return;
                     numericMarks(cell.innerText || cell.textContent).forEach(mark => grades.push(mark));
                   });
-                  const uniqueGrades = grades.filter((v, i) => grades.indexOf(v) === i);
-                  if (!uniqueGrades.length) return;
+                  if (!grades.length) return;
                   const key = subject.toLocaleLowerCase();
                   if (!seen.has(key)) {
                     seen.add(key);
-                    subjects.push({subject:subject, grades:uniqueGrades});
+                    subjects.push({subject:subject, grades:grades});
                   }
                 });
               });
