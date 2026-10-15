@@ -64,7 +64,7 @@ function = r'''    private fun showLegalNotice(markAsSeen: Boolean = false) {
         val scroll = android.widget.ScrollView(this).apply {
             setBackgroundColor(android.graphics.Color.WHITE)
             isFillViewport = true
-            addView(body, android.widget.ScrollView.LayoutParams(-1, -2))
+            addView(body, android.widget.FrameLayout.LayoutParams(-1, -2))
         }
 
         val dialog = android.app.AlertDialog.Builder(this)
