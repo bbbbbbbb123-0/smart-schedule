@@ -174,7 +174,9 @@ jobs:
                           openIntent,
                           PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
                       )
-                      views.setOnClickPendingIntent(R.id.widget_root, pending)
+                      views.setOnClickPendingIntent(R.id.widget_title, pending)
+                  views.setOnClickPendingIntent(R.id.widget_date, pending)
+                  views.setOnClickPendingIntent(R.id.widget_empty, pending)
 
                       val serviceIntent = Intent(context, ScheduleWidgetService::class.java).apply {
                           putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id)
@@ -285,6 +287,92 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+
+      - name: Add in-app widget button and preserve list scrolling
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          root = Path("project")
+          files = list(root.rglob("MainActivity.kt"))
+          if not files:
+              raise SystemExit("MainActivity.kt not found")
+          path = files[0]
+          text = path.read_text(encoding="utf-8")
+
+          if "requestAddWidget()" not in text:
+              text = text.replace(
+                  "import android.app.Activity\n",
+                  "import android.app.Activity\nimport android.appwidget.AppWidgetManager\nimport android.content.ComponentName\n",
+                  1
+              )
+              text = text.replace(
+                  "import android.widget.TextView\n",
+                  "import android.widget.TextView\nimport android.widget.Toast\n",
+                  1
+              )
+
+              function = '''    private fun requestAddWidget() {
+                  val manager = AppWidgetManager.getInstance(this)
+                  val provider = ComponentName(this, ScheduleWidgetProvider::class.java)
+                  if (!manager.isRequestPinAppWidgetSupported) {
+                      Toast.makeText(
+                          this,
+                          "Этот лаунчер не поддерживает добавление из приложения. Добавь виджет через меню виджетов рабочего стола.",
+                          Toast.LENGTH_LONG
+                      ).show()
+                      return
+                  }
+                  val requested = manager.requestPinAppWidget(provider, null, null)
+                  if (!requested) {
+                      Toast.makeText(
+                          this,
+                          "Не удалось открыть запрос. Добавь виджет через меню виджетов рабочего стола.",
+                          Toast.LENGTH_LONG
+                      ).show()
+                  }
+              }
+
+          '''
+              marker = "    private fun createView() {"
+              if marker not in text:
+                  raise SystemExit("Could not find createView insertion point")
+              text = text.replace(marker, function + marker, 1)
+
+              button = '''
+                  val addWidgetButton = Button(this).apply {
+                      text = "Добавить виджет на экран"
+                      isAllCaps = false
+                      setTextColor(Color.rgb(52, 84, 209))
+                      background = rounded(Color.WHITE, 14)
+                      setOnClickListener { requestAddWidget() }
+                  }
+                  content.addView(
+                      addWidgetButton,
+                      LinearLayout.LayoutParams(-1, dp(48)).apply { topMargin = dp(10) }
+                  )
+              '''
+              marker = "        content.addView(syncButton, buttonParams)\n"
+              if marker not in text:
+                  raise SystemExit("Could not find sync button insertion point")
+              text = text.replace(marker, marker + button + "\n", 1)
+              path.write_text(text, encoding="utf-8")
+
+          # Keep launcher taps away from the list itself so vertical swipes can scroll.
+          provider_files = list(root.rglob("ScheduleWidgetProvider.kt"))
+          if not provider_files:
+              raise SystemExit("ScheduleWidgetProvider.kt not found")
+          provider = provider_files[0]
+          kotlin = provider.read_text(encoding="utf-8")
+          kotlin = kotlin.replace(
+              "views.setOnClickPendingIntent(R.id.widget_title, pending)
+                  views.setOnClickPendingIntent(R.id.widget_date, pending)
+                  views.setOnClickPendingIntent(R.id.widget_empty, pending)",
+              "views.setOnClickPendingIntent(R.id.widget_title, pending)\n            views.setOnClickPendingIntent(R.id.widget_date, pending)\n            views.setOnClickPendingIntent(R.id.widget_empty, pending)"
+          )
+          provider.write_text(kotlin, encoding="utf-8")
+          print("Added pin-widget button; taps on the list no longer use a root-level PendingIntent.")
+          PY
 
       - name: Fix widget description
         run: |
