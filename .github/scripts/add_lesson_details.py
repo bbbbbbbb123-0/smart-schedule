@@ -192,7 +192,7 @@ if "ACTION_TOGGLE_LESSON" not in provider:
         raise SystemExit("Could not find companion object in ScheduleWidgetProvider.kt")
     provider = provider.replace(marker, constants, 1)
 
-    adapter_match = re.search(r'(?m)^(\s*)views\.setRemoteAdapter\(R\.id\.widget_lesson_list, serviceIntent\)\s*$', provider)
+    adapter_match = re.search(r'(?m)^([ \t]*)views\.setRemoteAdapter\(R\.id\.widget_lesson_list, serviceIntent\)\s*$', provider)
     if not adapter_match:
         raise SystemExit("Could not find setRemoteAdapter in widget provider")
     indent = adapter_match.group(1)
@@ -206,10 +206,10 @@ val clickTemplate = PendingIntent.getBroadcast(
     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
 )
 views.setPendingIntentTemplate(R.id.widget_lesson_list, clickTemplate)'''
-    template = "\n" + "\n".join(indent + line if line else "" for line in template_body.splitlines()) + "\\n"
+    template = "\n" + "\n".join(indent + line if line else "" for line in template_body.splitlines()) + "\n"
     provider = provider[:adapter_match.end()] + template + provider[adapter_match.end():]
 
-    update_match = re.search(r'(?m)^(\s*)manager\.updateAppWidget\(id, views\)\s*$', provider)
+    update_match = re.search(r'(?m)^([ \t]*)manager\.updateAppWidget\(id, views\)\s*$', provider)
     if not update_match:
         raise SystemExit("Could not find manager.updateAppWidget in widget provider")
     indent = update_match.group(1)
@@ -250,7 +250,7 @@ if "widget_lesson_key" not in service:
     indent = match.group(1)
     service = service[:match.start()] + indent + 'selectedDate = selected?.date.orEmpty()' + "\n" + service[match.start():]
 
-    match = re.search(r'(?m)^(\s*)row\.setTextViewText\(R\.id\.widget_lesson_subject, room \+ lesson\.subject\)\s*$', service)
+    match = re.search(r'(?m)^([ \t]*)row\.setTextViewText\(R\.id\.widget_lesson_subject, room \+ lesson\.subject\)\s*$', service)
     if not match:
         raise SystemExit("Could not find lesson row subject label in ScheduleWidgetService.kt")
     indent = match.group(1)
