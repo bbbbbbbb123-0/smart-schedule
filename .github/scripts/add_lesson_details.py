@@ -206,7 +206,7 @@ val clickTemplate = PendingIntent.getBroadcast(
     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
 )
 views.setPendingIntentTemplate(R.id.widget_lesson_list, clickTemplate)'''
-    template = "\\n" + "\\n".join(indent + line if line else "" for line in template_body.splitlines()) + "\\n"
+    template = "\n" + "\n".join(indent + line if line else "" for line in template_body.splitlines()) + "\\n"
     provider = provider[:adapter_match.end()] + template + provider[adapter_match.end():]
 
     update_match = re.search(r'(?m)^(\s*)manager\.updateAppWidget\(id, views\)\s*$', provider)
@@ -231,20 +231,20 @@ if (expandedLesson != null) {
 } else {
     views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.GONE)
 }'''
-    detail_logic = "\\n".join(indent + line for line in detail_body.splitlines()) + "\\n"
+    detail_logic = "\n".join(indent + line for line in detail_body.splitlines()) + "\\n"
     provider = provider[:update_match.start()] + detail_logic + provider[update_match.start():]
     provider_path.write_text(provider, encoding="utf-8")
 
 service_path = root / "SmartSchedule/app/src/main/java/kz/asckwab/smartschedule/ScheduleWidgetService.kt"
 service = service_path.read_text(encoding="utf-8")
 if "widget_lesson_key" not in service:
-    match = re.search(r'(?m)^(\s*)private var lessons: List<Lesson> = emptyList\(\)\s*$', service)
+    match = re.search(r'(?m)^([ \\t]*)private var lessons: List<Lesson> = emptyList\(\)\s*$', service)
     if not match:
         raise SystemExit("Could not find lesson list in ScheduleWidgetService.kt")
     indent = match.group(1)
     service = service[:match.end()] + "\n" + indent + 'private var selectedDate: String = ""' + service[match.end():]
 
-    match = re.search(r'(?m)^(\s*)lessons = selected\?\.lessons\.orEmpty\(\)\s*$', service)
+    match = re.search(r'(?m)^([ \\t]*)lessons = selected\?\.lessons\.orEmpty\(\)\s*$', service)
     if not match:
         raise SystemExit("Could not find lessons assignment in ScheduleWidgetService.kt")
     indent = match.group(1)
