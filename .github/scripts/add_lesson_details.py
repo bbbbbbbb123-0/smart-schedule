@@ -225,13 +225,13 @@ if (expandedLesson != null) {
     val gradeDetails = GradeStorage.detailsText(context, expandedLesson.subject)
     views.setTextViewText(
         R.id.widget_lesson_detail,
-        "${expandedLesson.subject}\\nПреподаватель: $teacher\\n$gradeDetails"
+        "${expandedLesson.subject}\nПреподаватель: $teacher\n$gradeDetails"
     )
     views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.VISIBLE)
 } else {
     views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.GONE)
 }'''
-    detail_logic = "\n".join(indent + line for line in detail_body.splitlines()) + "\\n"
+    detail_logic = "\n".join(indent + line for line in detail_body.splitlines()) + "\n"
     provider = provider[:update_match.start()] + detail_logic + provider[update_match.start():]
     provider_path.write_text(provider, encoding="utf-8")
 
