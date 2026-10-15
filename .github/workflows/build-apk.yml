@@ -481,6 +481,59 @@ jobs:
           print("Side-by-side test package ID and app label set.")
           PY
 
+      - name: Configure stable app identity and version
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          import time
+
+          root = Path("project")
+          matches = list(root.rglob("app/build.gradle.kts"))
+          if not matches:
+              raise SystemExit("app/build.gradle.kts not found")
+          build_file = matches[0]
+          text = build_file.read_text(encoding="utf-8")
+
+          text, app_count = re.subn(
+              r'applicationId\\s*=\\s*"[^"]+"',
+              'applicationId = "kz.asckwab.smartschedule.foundation"',
+              text,
+              count=1
+          )
+          text, code_count = re.subn(
+              r'versionCode\\s*=\\s*\\d+',
+              f'versionCode = {int(time.time()) - 1577836800}',
+              text,
+              count=1
+          )
+          text, name_count = re.subn(
+              r'versionName\\s*=\\s*"[^"]+"',
+              'versionName = "1.0.0"',
+              text,
+              count=1
+          )
+          if app_count != 1 or code_count != 1 or name_count != 1:
+              raise SystemExit("Could not configure stable package/version")
+          build_file.write_text(text, encoding="utf-8")
+
+          manifests = list(root.rglob("app/src/main/AndroidManifest.xml"))
+          if not manifests:
+              raise SystemExit("AndroidManifest.xml not found")
+          manifest = manifests[0]
+          xml = manifest.read_text(encoding="utf-8")
+          xml, label_count = re.subn(
+              r'android:label="[^"]*"',
+              'android:label="Smart Расписание — новая основа"',
+              xml,
+              count=1
+          )
+          if label_count != 1:
+              raise SystemExit("Could not set stable app label")
+          manifest.write_text(xml, encoding="utf-8")
+          print("Stable application ID, version code, and label configured.")
+          PY
+
       - name: Locate project
         id: project
         run: |
@@ -494,6 +547,52 @@ jobs:
       - name: Build APK
         working-directory: ${{ steps.project.outputs.dir }}
         run: gradle assembleDebug --stacktrace
+
+      - name: Sign APK with persistent private key
+        env:
+          ANDROID_SIGNING_BUNDLE: ${{ secrets.ANDROID_SIGNING_BUNDLE }}
+        run: |
+          if [ -z "$ANDROID_SIGNING_BUNDLE" ]; then
+            echo "::error::Repository Actions secret ANDROID_SIGNING_BUNDLE is required."
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import base64
+          import os
+          from pathlib import Path
+
+          bundle = os.environ["ANDROID_SIGNING_BUNDLE"].strip()
+          try:
+              encoded, password = bundle.split(":", 1)
+              keystore = base64.b64decode(encoded, validate=True)
+          except Exception as exc:
+              raise SystemExit("ANDROID_SIGNING_BUNDLE has an invalid format") from exc
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          (temp / "smartschedule-release.p12").write_bytes(keystore)
+          (temp / "smartschedule-signing-pass").write_text(password, encoding="utf-8")
+          PY
+
+          KEYSTORE="$RUNNER_TEMP/smartschedule-release.p12"
+          PASSWORD="$(cat "$RUNNER_TEMP/smartschedule-signing-pass")"
+          APKSIGNER="$(find "${ANDROID_HOME:-$ANDROID_SDK_ROOT}/build-tools" -type f -name apksigner -print | sort -V | tail -n 1)"
+          if [ -z "$APKSIGNER" ] || [ ! -x "$APKSIGNER" ]; then
+            echo "::error::Could not locate Android apksigner."
+            exit 1
+          fi
+
+          mapfile -t APKS < <(find project -type f -name '*.apk' -path '*/build/outputs/apk/*')
+          if [ "${#APKS[@]}" -eq 0 ]; then
+            echo "::error::No APK files found to sign."
+            exit 1
+          fi
+          for APK in "${APKS[@]}"; do
+            "$APKSIGNER" sign --ks "$KEYSTORE" --ks-key-alias smartschedule --ks-pass "pass:$PASSWORD" --key-pass "pass:$PASSWORD" --out "$APK.signed" "$APK"
+            mv "$APK.signed" "$APK"
+            "$APKSIGNER" verify "$APK"
+            echo "Signed and verified $(basename "$APK")"
+          done
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
