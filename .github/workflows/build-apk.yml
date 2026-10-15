@@ -29,7 +29,12 @@ jobs:
           def write_one(pattern, content):
               matches = list(root.rglob(pattern))
               if not matches:
-                  raise SystemExit(f"Cannot find {pattern}")
+                  if pattern.endswith(".kt"):
+                      target = root / "SmartSchedule/app/src/main/java/kz/asckwab/smartschedule" / pattern
+                  else:
+                      target = root / "SmartSchedule/app/src/main/res/layout" / pattern
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  matches = [target]
               matches[0].write_text(content.lstrip(), encoding="utf-8")
               print(f"Updated {matches[0]}")
 
@@ -235,11 +240,11 @@ jobs:
                   val lesson = lessons.getOrNull(position) ?: return null
                   val row = RemoteViews(context.packageName, R.layout.widget_lesson_row)
                   val time = when {
-                      lesson.start.isNotBlank() && lesson.end.isNotBlank() -> "\${lesson.start}–\${lesson.end}"
+                      lesson.start.isNotBlank() && lesson.end.isNotBlank() -> "${lesson.start}–${lesson.end}"
                       lesson.start.isNotBlank() -> lesson.start
                       else -> "Время не указано"
                   }
-                  val room = lesson.room.takeIf { it.isNotBlank() }?.let { "\${it} · " }.orEmpty()
+                  val room = lesson.room.takeIf { it.isNotBlank() }?.let { "${it} · " }.orEmpty()
                   row.setTextViewText(R.id.widget_lesson_time, time)
                   row.setTextViewText(R.id.widget_lesson_subject, room + lesson.subject)
                   return row
