@@ -192,75 +192,77 @@ if "ACTION_TOGGLE_LESSON" not in provider:
         raise SystemExit("Could not find companion object in ScheduleWidgetProvider.kt")
     provider = provider.replace(marker, constants, 1)
 
-    adapter = '                      views.setRemoteAdapter(R.id.widget_lesson_list, serviceIntent)\n'
-    if adapter not in provider:
-        adapter = '                  views.setRemoteAdapter(R.id.widget_lesson_list, serviceIntent)\n'
-    if adapter not in provider:
+    adapter_match = re.search(r'(?m)^(\s*)views\.setRemoteAdapter\(R\.id\.widget_lesson_list, serviceIntent\)\s*$', provider)
+    if not adapter_match:
         raise SystemExit("Could not find setRemoteAdapter in widget provider")
-    template = '''                      val clickTemplateIntent = Intent(context, ScheduleWidgetProvider::class.java).apply {
-                          action = ACTION_TOGGLE_LESSON
-                      }
-                      val clickTemplate = PendingIntent.getBroadcast(
-                          context,
-                          3100 + id,
-                          clickTemplateIntent,
-                          PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
-                      )
-                      views.setPendingIntentTemplate(R.id.widget_lesson_list, clickTemplate)
-'''
-    provider = provider.replace(adapter, adapter + template, 1)
+    indent = adapter_match.group(1)
+    template_body = '''val clickTemplateIntent = Intent(context, ScheduleWidgetProvider::class.java).apply {
+    action = ACTION_TOGGLE_LESSON
+}
+val clickTemplate = PendingIntent.getBroadcast(
+    context,
+    3100 + id,
+    clickTemplateIntent,
+    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE
+)
+views.setPendingIntentTemplate(R.id.widget_lesson_list, clickTemplate)'''
+    template = "\\n" + "\\n".join(indent + line if line else "" for line in template_body.splitlines()) + "\\n"
+    provider = provider[:adapter_match.end()] + template + provider[adapter_match.end():]
 
-    needle = '                      manager.updateAppWidget(id, views)\n'
-    detail_logic = '''                      val expandedKey = context.getSharedPreferences(WIDGET_PREFS, Context.MODE_PRIVATE)
-                          .getString(KEY_EXPANDED_LESSON, "")
-                      val expandedLesson = selected?.let { day ->
-                          day.lessons.firstOrNull { lesson ->
-                              "${day.date}|${lesson.start}|${lesson.subject}" == expandedKey
-                          }
-                      }
-                      if (expandedLesson != null) {
-                          val teacher = expandedLesson.teacher.takeIf { it.isNotBlank() } ?: "не указан в расписании"
-                          val gradeDetails = GradeStorage.detailsText(context, expandedLesson.subject)
-                          views.setTextViewText(
-                              R.id.widget_lesson_detail,
-                              "${expandedLesson.subject}\\nПреподаватель: $teacher\\n$gradeDetails"
-                          )
-                          views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.VISIBLE)
-                      } else {
-                          views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.GONE)
-                      }
-'''
-    if needle not in provider:
+    update_match = re.search(r'(?m)^(\s*)manager\.updateAppWidget\(id, views\)\s*$', provider)
+    if not update_match:
         raise SystemExit("Could not find manager.updateAppWidget in widget provider")
-    provider = provider.replace(needle, detail_logic + needle, 1)
+    indent = update_match.group(1)
+    detail_body = r'''val expandedKey = context.getSharedPreferences(WIDGET_PREFS, Context.MODE_PRIVATE)
+    .getString(KEY_EXPANDED_LESSON, "")
+val expandedLesson = selected?.let { day ->
+    day.lessons.firstOrNull { lesson ->
+        "${day.date}|${lesson.start}|${lesson.subject}" == expandedKey
+    }
+}
+if (expandedLesson != null) {
+    val teacher = expandedLesson.teacher.takeIf { it.isNotBlank() } ?: "не указан в расписании"
+    val gradeDetails = GradeStorage.detailsText(context, expandedLesson.subject)
+    views.setTextViewText(
+        R.id.widget_lesson_detail,
+        "${expandedLesson.subject}\\nПреподаватель: $teacher\\n$gradeDetails"
+    )
+    views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.VISIBLE)
+} else {
+    views.setViewVisibility(R.id.widget_lesson_detail, android.view.View.GONE)
+}'''
+    detail_logic = "\\n".join(indent + line for line in detail_body.splitlines()) + "\\n"
+    provider = provider[:update_match.start()] + detail_logic + provider[update_match.start():]
     provider_path.write_text(provider, encoding="utf-8")
 
 service_path = root / "SmartSchedule/app/src/main/java/kz/asckwab/smartschedule/ScheduleWidgetService.kt"
 service = service_path.read_text(encoding="utf-8")
 if "widget_lesson_key" not in service:
-    service = service.replace(
-        '              private var lessons: List<Lesson> = emptyList()\n',
-        '              private var lessons: List<Lesson> = emptyList()\n              private var selectedDate: String = ""\n',
-        1
-    )
-    service = service.replace(
-        '                  lessons = selected?.lessons.orEmpty()\n',
-        '                  selectedDate = selected?.date.orEmpty()\n                  lessons = selected?.lessons.orEmpty()\n',
-        1
-    )
-    marker = '                  row.setTextViewText(R.id.widget_lesson_subject, room + lesson.subject)\n'
-    fillin = '''                  row.setTextViewText(R.id.widget_lesson_subject, room + lesson.subject)
-                  row.setOnClickFillInIntent(
-                      R.id.widget_lesson_row_root,
-                      Intent().putExtra(
-                          ScheduleWidgetProvider.EXTRA_LESSON_KEY,
-                          "$selectedDate|${lesson.start}|${lesson.subject}"
-                      )
-                  )
-'''
-    if marker not in service:
+    match = re.search(r'(?m)^(\s*)private var lessons: List<Lesson> = emptyList\(\)\s*$', service)
+    if not match:
+        raise SystemExit("Could not find lesson list in ScheduleWidgetService.kt")
+    indent = match.group(1)
+    service = service[:match.end()] + "\n" + indent + 'private var selectedDate: String = ""' + service[match.end():]
+
+    match = re.search(r'(?m)^(\s*)lessons = selected\?\.lessons\.orEmpty\(\)\s*$', service)
+    if not match:
+        raise SystemExit("Could not find lessons assignment in ScheduleWidgetService.kt")
+    indent = match.group(1)
+    service = service[:match.start()] + indent + 'selectedDate = selected?.date.orEmpty()' + "\n" + service[match.start():]
+
+    match = re.search(r'(?m)^(\s*)row\.setTextViewText\(R\.id\.widget_lesson_subject, room \+ lesson\.subject\)\s*$', service)
+    if not match:
         raise SystemExit("Could not find lesson row subject label in ScheduleWidgetService.kt")
-    service = service.replace(marker, fillin, 1)
+    indent = match.group(1)
+    fill_body = r'''row.setOnClickFillInIntent(
+    R.id.widget_lesson_row_root,
+    Intent().putExtra(
+        ScheduleWidgetProvider.EXTRA_LESSON_KEY,
+        "$selectedDate|${lesson.start}|${lesson.subject}"
+    )
+)'''
+    fillin = "\n" + "\n".join(indent + line for line in fill_body.splitlines()) + "\n"
+    service = service[:match.end()] + fillin + service[match.end():]
     service_path.write_text(service, encoding="utf-8")
 
 main_path = root / "SmartSchedule/app/src/main/java/kz/asckwab/smartschedule/MainActivity.kt"
