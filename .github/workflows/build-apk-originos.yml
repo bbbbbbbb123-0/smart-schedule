@@ -609,19 +609,19 @@ jobs:
           text = build_file.read_text(encoding="utf-8")
 
           text, app_count = re.subn(
-              r'applicationId\\s*=\\s*"[^"]+"',
+              r'applicationId\s*=\s*"[^"]+"',
               'applicationId = "kz.asckwab.smartschedule.foundation"',
               text,
               count=1
           )
           text, code_count = re.subn(
-              r'versionCode\\s*=\\s*\\d+',
+              r'versionCode\s*=\s*\d+',
               f'versionCode = {int(time.time()) - 1577836800}',
               text,
               count=1
           )
           text, name_count = re.subn(
-              r'versionName\\s*=\\s*"[^"]+"',
+              r'versionName\s*=\s*"[^"]+"',
               'versionName = "1.0.0"',
               text,
               count=1
