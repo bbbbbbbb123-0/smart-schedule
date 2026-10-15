@@ -386,6 +386,25 @@ jobs:
                   raise SystemExit("Could not fix widget description")
               widget.write_text(xml, encoding="utf-8")
 
+          def set_widget_attr(text, name, value):
+              pattern = rf'android:{name}="[^"]*"'
+              replacement = f'android:{name}="{value}"'
+              if re.search(pattern, text):
+                  return re.sub(pattern, replacement, text, count=1)
+              return text.replace("<appwidget-provider ", f'<appwidget-provider {replacement} ', 1)
+
+          for attr, value in {
+              "minWidth": "160dp",
+              "minHeight": "100dp",
+              "minResizeWidth": "110dp",
+              "minResizeHeight": "70dp",
+              "targetCellWidth": "2",
+              "targetCellHeight": "2",
+              "resizeMode": "horizontal|vertical",
+          }.items():
+              xml = set_widget_attr(xml, attr, value)
+          widget.write_text(xml, encoding="utf-8")
+
           values = widget.parent.parent / "values"
           values.mkdir(parents=True, exist_ok=True)
           strings = values / "strings.xml"
