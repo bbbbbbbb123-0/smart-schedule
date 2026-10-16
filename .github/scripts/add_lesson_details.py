@@ -12,7 +12,8 @@ import java.util.Locale
 
 data class SubjectGrades(
     val subject: String,
-    val grades: List<String>
+    val grades: List<String>,
+    val journalId: String = ""
 ) {
     val numericGrades: List<Double>
         get() = grades.mapNotNull { it.replace(',', '.').toDoubleOrNull() }
@@ -31,28 +32,41 @@ object GradeStorage {
             val root = JSONObject(raw)
             if (!root.optBoolean("ok", false)) return false
             val input = root.optJSONArray("subjects") ?: JSONArray()
-            val subjects = mutableListOf<SubjectGrades>()
+            if (input.length() == 0) return false
+
+            val updated = loadAll(context).toMutableList()
+            var recognized = false
             for (i in 0 until input.length()) {
                 val obj = input.optJSONObject(i) ?: continue
                 val subject = obj.optString("subject").trim()
+                if (subject.isBlank()) continue
+                val journalId = obj.optString("journalId").trim()
                 val marks = obj.optJSONArray("grades") ?: JSONArray()
-                val grades = mutableListOf<String>()
-                for (j in 0 until marks.length()) {
+                val grades = (0 until marks.length()).mapNotNull { j ->
                     val value = marks.optString(j).trim().replace(',', '.')
                     val n = value.toDoubleOrNull()
-                    if (value.isNotBlank() && n != null && n.isFinite() && n in 0.0..100.0) {
-                        grades += value
-                    }
+                    if (value.isNotBlank() && n != null && n.isFinite() && n in 0.0..100.0) value else null
                 }
-                if (subject.isNotBlank() && grades.isNotEmpty()) {
-                    subjects += SubjectGrades(subject, grades)
+                val entry = SubjectGrades(subject, grades, journalId)
+                val index = updated.indexOfFirst {
+                    if (journalId.isNotBlank() && it.journalId.isNotBlank()) it.journalId == journalId
+                    else normalize(it.subject) == normalize(subject)
                 }
+                if (index >= 0) {
+                    // Empty pages must not erase grades previously captured from the same journal.
+                    if (grades.isNotEmpty()) updated[index] = entry
+                } else {
+                    updated += entry
+                }
+                recognized = true
             }
-            if (subjects.isEmpty()) return false
+            if (!recognized) return false
+
             val jsonSubjects = JSONArray()
-            subjects.forEach { record ->
+            updated.forEach { record ->
                 jsonSubjects.put(JSONObject()
                     .put("subject", record.subject)
+                    .put("journalId", record.journalId)
                     .put("grades", JSONArray(record.grades)))
             }
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
@@ -74,10 +88,14 @@ object GradeStorage {
             (0 until array.length()).mapNotNull { i ->
                 val obj = array.optJSONObject(i) ?: return@mapNotNull null
                 val subject = obj.optString("subject").trim()
+                if (subject.isBlank()) return@mapNotNull null
                 val values = obj.optJSONArray("grades") ?: JSONArray()
-                val grades = (0 until values.length()).map { values.optString(it).trim() }
-                    .filter { it.replace(',', '.').toDoubleOrNull()?.let { n -> n.isFinite() && n in 0.0..100.0 } == true }
-                if (subject.isBlank() || grades.isEmpty()) null else SubjectGrades(subject, grades)
+                val grades = (0 until values.length()).mapNotNull { j ->
+                    val value = values.optString(j).trim().replace(',', '.')
+                    val n = value.toDoubleOrNull()
+                    if (n != null && n.isFinite() && n in 0.0..100.0) value else null
+                }
+                SubjectGrades(subject, grades, obj.optString("journalId").trim())
             }
         } catch (_: Exception) {
             emptyList()
@@ -88,20 +106,26 @@ object GradeStorage {
         val wanted = normalize(subject)
         if (wanted.isBlank()) return null
         val all = loadAll(context)
-        all.firstOrNull { normalize(it.subject) == wanted }?.let { return it }
-        val candidates = all.filter {
+        val exact = all.filter { normalize(it.subject) == wanted }
+        val matches = if (exact.isNotEmpty()) exact else all.filter {
             val have = normalize(it.subject)
             have.isNotBlank() && (have.contains(wanted) || wanted.contains(have))
         }
-        return candidates.maxByOrNull { normalize(it.subject).length }
+        if (matches.isEmpty()) return null
+        return SubjectGrades(
+            subject = matches.first().subject,
+            grades = matches.flatMap { it.grades },
+            journalId = matches.map { it.journalId }.filter { it.isNotBlank() }.joinToString(",")
+        )
     }
 
     fun detailsText(context: Context, subject: String): String {
         val record = findForSubject(context, subject)
-            ?: return "Оценки: пока не сохранены\nОткрой приложение и нажми «Обновить оценки»."
-        val average = record.average
-        val averageText = average?.let { String.format(Locale("ru", "RU"), "%.2f", it) }
-            ?: "нет числовых оценок"
+            ?: return "Оценки: ещё не сохранены\nОткрой приложение и нажми «Обновить оценки из SmartNation»."
+        if (record.numericGrades.isEmpty()) {
+            return "Оценки пока не выставлены\nСреднее арифметическое: —"
+        }
+        val averageText = String.format(Locale("ru", "RU"), "%.2f", record.average)
         return "Оценки: ${record.grades.joinToString(", ")}\nСреднее арифметическое: $averageText"
     }
 
@@ -359,23 +383,44 @@ if "EXTRA_GRADES_MODE" not in web:
                 value
             }
             val result = try { JSONObject(decoded) } catch (_: Exception) { null }
-            if (result?.optBoolean("ok", false) == true) {
+            if (result?.optString("stage") == "journal_list") {
+                status.text = "Открылся список журналов. Нажми значок глаза справа от нужного предмета — после открытия журнала приложение прочитает оценки."
+                progress.visibility = ProgressBar.GONE
+                return@evaluateJavascript
+            }
+            if (result?.optBoolean("ok", false) == true &&
+                result.optString("stage") == "journal_detail") {
+                val entry = result.optJSONArray("subjects")?.optJSONObject(0)
+                val subject = entry?.optString("subject").orEmpty()
+                val count = entry?.optJSONArray("grades")?.length() ?: 0
+                if (count == 0) {
+                    syncSucceeded = true
+                    handler.removeCallbacks(retryRunnable)
+                    progress.visibility = ProgressBar.GONE
+                    status.text = "Предмет «$subject» найден, но на этой странице пока нет числовых оценок. Уже сохранённые оценки не удалены."
+                    return@evaluateJavascript
+                }
+
                 val accepted = GradeStorage.saveFromWebJson(this, decoded)
                 if (accepted) {
                     syncSucceeded = true
                     handler.removeCallbacks(retryRunnable)
                     progress.visibility = ProgressBar.GONE
-                    val count = result.optJSONArray("subjects")?.length() ?: 0
-                    status.text = "Оценки сохранены для $count предметов. Можешь вернуться в приложение."
-                    Toast.makeText(this, "Оценки сохранены", Toast.LENGTH_SHORT).show()
+                    status.text = "Оценки по «$subject» сохранены ($count). Вернись в приложение и нажми на пару в виджете."
+                    Toast.makeText(this, "Оценки сохранены", Toast.LENGTH_LONG).show()
                 } else {
-                    status.text = "Оценки распознаны не полностью. Открой нужный журнал или книжку успеваемости и попробуй ещё раз."
+                    status.text = "Журнал «${entrySubject(decoded)}» найден, но не удалось сохранить оценки. Обнови страницу и попробуй ещё раз."
                 }
             } else {
-                status.text = "Не нашёл таблицу с оценками. Открой «Журнал», перейди к оценкам по предметам и нажми эту кнопку ещё раз."
+                status.text = "Перейди в раздел «Журнал», нажми значок глаза напротив нужного предмета и дождись загрузки страницы с оценками."
+                progress.visibility = ProgressBar.GONE
             }
         }
     }
+
+    private fun entrySubject(raw: String): String = try {
+        JSONObject(raw).optJSONArray("subjects")?.optJSONObject(0)?.optString("subject").orEmpty()
+    } catch (_: Exception) { "" }
 
 '''
     marker = '    private fun inspectPage() {\n'
@@ -399,53 +444,52 @@ if "EXTRA_GRADES_MODE" not in web:
 
     extract_js = r'''        private val EXTRACT_GRADES_JS = """
             (function() {
-              if (location.hostname !== 'college.smartnation.kz') return JSON.stringify({ok:false, reason:'not-smartnation-host'});
-              const clean = v => (v || '').replace(/\s+/g, ' ').trim();
-              const numericMarks = value => {
-                const text = clean(value).replace(/,/g, '.');
-                const matches = text.match(/(?<!\d)(?:100|[1-9]?\d(?:\.\d{1,2})?)(?!\d)/g) || [];
-                return matches.filter(v => {
-                  const n = Number(v);
-                  return Number.isFinite(n) && n >= 0 && n <= 100;
-                });
-              };
-              const subjects = [];
-              const seen = new Set();
-              const tables = Array.from(document.querySelectorAll('table'));
-              tables.forEach(table => {
-                const rows = Array.from(table.rows || []);
-                if (rows.length < 2) return;
-                const headerIndex = rows.findIndex(row =>
-                  Array.from(row.cells || []).some(cell =>
-                    /предмет|дисциплин|модул|наименован|subject|course/i.test(clean(cell.innerText || cell.textContent))
-                  )
-                );
-                if (headerIndex < 0) return;
-                const headers = Array.from(rows[headerIndex].cells || []).map(cell => clean(cell.innerText || cell.textContent));
-                const subjectIndex = headers.findIndex(h => /предмет|дисциплин|модул|наименован|subject|course/i.test(h));
-                const gradeIndices = headers.map((h, index) =>
-                  /оценк|балл|результат|grade|mark|score|аттест|текущ/i.test(h) ? index : -1
-                ).filter(index => index >= 0 && index !== subjectIndex);
-                if (subjectIndex < 0 || gradeIndices.length === 0) return;
-                rows.slice(headerIndex + 1).forEach(row => {
-                  const cells = Array.from(row.cells || []);
-                  const subject = clean(cells[subjectIndex]?.innerText || cells[subjectIndex]?.textContent);
-                  if (!subject || subject.length < 2 || /^(итого|средн|всего|предмет|дисциплина)$/i.test(subject)) return;
-                  const grades = [];
-                  gradeIndices.forEach(index => {
-                    const cell = cells[index];
-                    if (!cell) return;
-                    numericMarks(cell.innerText || cell.textContent).forEach(mark => grades.push(mark));
-                  });
-                  if (!grades.length) return;
-                  const key = subject.toLocaleLowerCase();
-                  if (!seen.has(key)) {
-                    seen.add(key);
-                    subjects.push({subject:subject, grades:grades});
-                  }
+              const clean = value => (value || '').replace(/\s+/g, ' ').trim();
+              if (location.hostname !== 'college.smartnation.kz') {
+                return JSON.stringify({ok:false, stage:'wrong_host'});
+              }
+
+              // On the journals list, every eye icon opens a separate journal page.
+              const journalList = document.querySelector('.s-table-cabinet');
+              const eyeLinks = Array.from(document.querySelectorAll(
+                '.s-table-cabinet a.s-btn-table[title="Посмотреть"], .s-table-cabinet a .s-ico--thm-eye'
+              ));
+              if (journalList && eyeLinks.length > 0) {
+                return JSON.stringify({ok:false, stage:'journal_list'});
+              }
+
+              // A journal detail page keeps the subject in a metadata table and marks
+              // in a separate horizontally-scrollable table.
+              const metadataRows = Array.from(document.querySelectorAll('tr.sc-journal__control--table-row'));
+              const subjectRow = metadataRows.find(row => {
+                const label = clean(row.querySelector('.sc-journal__control--table-label')?.innerText);
+                return /^предмет\s*:?$/i.test(label);
+              });
+              const subject = clean(subjectRow?.querySelector('.sc-journal__control--table-value')?.innerText);
+              const gradeTable = document.querySelector('table.sc-journal__table--scroll-part');
+              if (!subject || !gradeTable) {
+                return JSON.stringify({ok:false, stage:'not_journal_detail'});
+              }
+
+              const grades = [];
+              Array.from(gradeTable.querySelectorAll('tr.sc-journal__table--row')).forEach(row => {
+                Array.from(row.querySelectorAll('td.sc-journal__table--cell-day')).forEach(cell => {
+                  const valueNode = cell.querySelector('.sc-journal__table--cell-value');
+                  const raw = clean(valueNode ? valueNode.innerText : cell.innerText).replace(/,/g, '.');
+                  // Accept only a whole numeric cell value so dates and unrelated numbers are ignored.
+                  if (!/^(?:100(?:\.0{1,2})?|[0-9]{1,2}(?:\.[0-9]{1,2})?)$/.test(raw)) return;
+                  const mark = Number(raw);
+                  if (Number.isFinite(mark) && mark >= 0 && mark <= 100) grades.push(raw);
                 });
               });
-              return JSON.stringify({ok:subjects.length > 0, subjects:subjects, reason:subjects.length ? '' : 'grade-table-not-found'});
+
+              const match = location.pathname.match(/\/journals\/(\d+)(?:\/|$)/);
+              const journalId = match ? match[1] : '';
+              return JSON.stringify({
+                ok:true,
+                stage:'journal_detail',
+                subjects:[{subject:subject, grades:grades, journalId:journalId}]
+              });
             })();
         """.trimIndent()
 '''
