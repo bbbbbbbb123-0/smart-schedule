@@ -3,7 +3,7 @@ name: Build Inder Bus Watch APK
 on:
   push:
     branches:
-      - bus-ticket-monitor
+      - main
     paths:
       - 'BusTicketWatch/**'
       - '.github/workflows/build-bus-ticket-watch.yml'
